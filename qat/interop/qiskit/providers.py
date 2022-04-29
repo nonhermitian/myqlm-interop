@@ -90,9 +90,7 @@ from uuid import uuid4
 import numpy as np
 
 from qiskit_ibm_runtime import QiskitRuntimeService, Sampler
-from qiskit_ibm_runtime import IBMBackend as RuntimeBackend
 from qiskit.providers import BackendV1, JobV1, Options
-from qiskit.providers.ibmq import IBMQBackend
 from qiskit.providers.models.backendconfiguration import BackendConfiguration
 from qiskit.result import Result
 from qiskit.result.models import ExperimentResult, ExperimentResultData
@@ -138,9 +136,9 @@ def generate_qlm_result(qiskit_result):
         A QLM Result object built from the data in qiskit_result
     """
 
-    nbshots = qiskit_result.results[0].shots
+    nbshots = qiskit_result.metadata[0]['shots']
     try:
-        counts = [result.data.counts for result in qiskit_result.results]
+        counts = [dist for dist in qiskit_result.quasi_dists]
     except AttributeError:
         print("No measures, so the result is empty")
         return QlmRes(raw_data=[])
@@ -151,7 +149,7 @@ def generate_qlm_result(qiskit_result):
             print(f"State is {type(state)}")
         ret.raw_data.append(
             Sample(state=state,
-                   probability=freq / nbshots,
+                   probability=freq,
                    err=np.sqrt(
                        freq / nbshots * (1. - freq / nbshots) / (nbshots - 1))
                    if nbshots > 1 else None)
@@ -170,9 +168,9 @@ def generate_qlm_list_results(qiskit_result):
         A QLM Result object built from the data in qiskit_result
     """
 
-    nbshots = qiskit_result.results[0].shots
+    nbshots = qiskit_result.metadata[0]['shots']
     try:
-        counts = [result.data.counts for result in qiskit_result.results]
+        counts = [dist for dist in qiskit_result.quasi_dists]
     except AttributeError:
         print("No measures, so the result is empty")
         return QlmRes(raw_data=[])
@@ -185,7 +183,7 @@ def generate_qlm_list_results(qiskit_result):
                 print("State is {type(state)}")
             ret.raw_data.append(
                 Sample(state=state,
-                       probability=freq / nbshots,
+                       probability=freq,
                        err=np.sqrt(
                            freq / nbshots * (1. - freq / nbshots) / (nbshots - 1))
                        if nbshots > 1 else None)
