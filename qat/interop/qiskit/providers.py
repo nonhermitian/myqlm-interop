@@ -89,7 +89,10 @@ import warnings
 from uuid import uuid4
 import numpy as np
 
+from qiskit_ibm_runtime import QiskitRuntimeService, Sampler
+from qiskit_ibm_runtime import IBMBackend as RuntimeBackend
 from qiskit.providers import BackendV1, JobV1, Options
+from qiskit.providers.ibmq import IBMQBackend
 from qiskit.providers.models.backendconfiguration import BackendConfiguration
 from qiskit.result import Result
 from qiskit.result.models import ExperimentResult, ExperimentResultData
@@ -472,6 +475,7 @@ class BackendToQPU(QPUHandler):
             1: Light optimization. 2: Heavy optimization. 3: Highest optimization.
     """
     def __init__(self, backend=None, plugins=None, token=None,
+    
                  ibmq_backend='ibmq_qasm_simulator', optimization_level=0):
         """
         Args:
@@ -485,6 +489,8 @@ class BackendToQPU(QPUHandler):
         super().__init__(plugins)
         self.set_backend(backend, token, ibmq_backend)
         self.optimization_level = optimization_level
+        # Hold the internally created runtime service instance
+        self._service = None
 
     def set_backend(self, backend=None, token=None,
                     ibmq_backend='ibmq_qasm_simulator'):
@@ -533,13 +539,22 @@ class BackendToQPU(QPUHandler):
         for qlm_job in qlm_batch.jobs:
             qiskit_circuit = job_to_qiskit_circuit(qlm_job)
             qiskit_circuits.append(qiskit_circuit)
-        qiskit_result = execute(
-            qiskit_circuits, self.backend,
-            shots=qlm_batch.jobs[0].nbshots or self.backend.configuration().max_shots,
-            coupling_map=None,
-            optimization_level=self.optimization_level
-        ).result()
-        results = generate_qlm_list_results(qiskit_result)
+
+        # Create a service instance if one not already attached
+        # To do this in a backward compatible way, we need to extract
+        # the user token from the backend instance and directly init
+        # a new service object
+        if self._service is None:
+            iqx_token = self.backend._api_client._credentials.token
+            self._service = QiskitRuntimeService(token=iqx_token,
+                                                 channel='ibm_quantum')
+        with Sampler(circuits=qiskit_circuits,
+                     service=self._service,
+                     options={"backend": self.backend.name()}) as sampler:
+            result = sampler(circuit_indices=list(range(len(qiskit_circuits))),
+                            shots=qlm_batch.jobs[0].nbshots or \
+                                self.backend.configuration().max_shots)
+        results = generate_qlm_list_results(result)
         new_results = []
         for result in results:
             new_results.append(WResult.from_thrift(result))
