@@ -167,10 +167,17 @@ def generate_qlm_list_results(qiskit_result):
     Returns:
         A QLM Result object built from the data in qiskit_result
     """
+    if isinstance(qiskit_result, dict):
+        # This is a raw call to the Sampler program
+        nbshots = qiskit_result['metadata'][0]['shots']
+    else:
+        nbshots = qiskit_result.metadata[0]['shots']
 
-    nbshots = qiskit_result.metadata[0]['shots']
     try:
-        counts = [dist for dist in qiskit_result.quasi_dists]
+        if isinstance(qiskit_result, dict):
+            counts = [dist for dist in qiskit_result['quasi_dists']]
+        else:
+            counts = [dist for dist in qiskit_result.quasi_dists]
     except AttributeError:
         print("No measures, so the result is empty")
         return QlmRes(raw_data=[])
@@ -487,8 +494,13 @@ class BackendToQPU(QPUHandler):
         super().__init__(plugins)
         self.set_backend(backend, token, ibmq_backend)
         self.optimization_level = optimization_level
-        # Hold the internally created runtime service instance
-        self._service = None
+        # Create a service instance if one not already attached
+        # To do this in a backward compatible way, we need to extract
+        # the user token from the backend instance and directly init
+        # a new service object
+        iqx_token = self.backend._api_client._credentials.token
+        self._service = QiskitRuntimeService(token=iqx_token,
+                                             channel='ibm_quantum')
 
     def set_backend(self, backend=None, token=None,
                     ibmq_backend='ibmq_qasm_simulator'):
@@ -538,14 +550,6 @@ class BackendToQPU(QPUHandler):
             qiskit_circuit = job_to_qiskit_circuit(qlm_job)
             qiskit_circuits.append(qiskit_circuit)
 
-        # Create a service instance if one not already attached
-        # To do this in a backward compatible way, we need to extract
-        # the user token from the backend instance and directly init
-        # a new service object
-        if self._service is None:
-            iqx_token = self.backend._api_client._credentials.token
-            self._service = QiskitRuntimeService(token=iqx_token,
-                                                 channel='ibm_quantum')
         with Sampler(circuits=qiskit_circuits,
                      service=self._service,
                      options={"backend": self.backend.name()}) as sampler:
@@ -624,7 +628,7 @@ class QiskitJob:
                     Result of a previous asynchronous execution of qlm_batch
             max_shots: Maximal number of shots allowed by the Backend
         """
-        self._job_id = async_job.job_id()
+        self._job_id = async_job.job_id
         self._handler = async_job
         self._max_shots = max_shots
         if isinstance(qlm_batch, Job):
@@ -731,6 +735,13 @@ class AsyncBackendToQPU(QPUHandler):
         """
         super().__init__()
         self.set_backend(backend, token, ibmq_backend)
+        # Create a service instance if one not already attached
+        # To do this in a backward compatible way, we need to extract
+        # the user token from the backend instance and directly init
+        # a new service object
+        iqx_token = self.backend._api_client._credentials.token
+        self._service = QiskitRuntimeService(token=iqx_token,
+                                             channel='ibm_quantum')
 
     def set_backend(self, backend=None, token=None,
                     ibmq_backend='ibmq_qasm_simulator'):
@@ -778,10 +789,13 @@ class AsyncBackendToQPU(QPUHandler):
             raise ValueError("Backend cannot be None")
 
         qiskit_circuit = job_to_qiskit_circuit(qlm_job)
-        async_job = execute(
-            qiskit_circuit, self.backend,
-            shots=qlm_job.nbshots or self.backend.configuration().max_shots,
-            coupling_map=None)
+        program_inputs = {'circuits': qiskit_circuit,
+                          'run_options': {'shots': qlm_job.nbshots or \
+                              self.backend.configuration().max_shots},
+                          'circuit_indices': [0]}
+        options = {'backend_name': self.backend.name()}
+
+        async_job = self._service.run(program_id="sampler", options=options, inputs=program_inputs)
         return QiskitJob(qlm_job, async_job, self.backend.configuration().max_shots)
 
     def submit(self, qlm_batch):
@@ -806,10 +820,14 @@ class AsyncBackendToQPU(QPUHandler):
         for qlm_job in qlm_batch.jobs:
             qiskit_circuit = job_to_qiskit_circuit(qlm_job)
             qiskit_circuits.append(qiskit_circuit)
-        async_job = execute(
-            qiskit_circuits, self.backend,
-            shots=qlm_batch.jobs[0].nbshots or self.backend.configuration().max_shots,
-            coupling_map=None)
+
+        program_inputs = {'circuits': qiskit_circuits,
+                          'run_options': {'shots': qlm_job.nbshots or \
+                              self.backend.configuration().max_shots},
+                          'circuit_indices': [0]}
+        options = {'backend_name': self.backend.name()}
+
+        async_job = self._service.run(program_id="sampler", options=options, inputs=program_inputs)
         return QiskitJob(qlm_batch, async_job, self.backend.configuration().max_shots)
 
     def retrieve_job(self, file_name):
