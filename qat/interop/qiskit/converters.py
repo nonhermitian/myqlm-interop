@@ -734,9 +734,7 @@ def qlm_to_qiskit(qlm_circuit, qubits=None):
             for index, qbit in enumerate(gate_op.qbits):
                 q_circ.measure(qbit, gate_op.cbits[index])  # pylint:disable=no-member
 
-    # Adding measures to unify the interface
-    for qbit_index, cbit in zip(qubits, creg):
-        q_circ.measure(qreg[qbit_index], cbit)  # pylint: disable=no-member
+    
     return q_circ
 
 

@@ -142,7 +142,7 @@ def generate_qlm_result(qiskit_result):
     except AttributeError:
         print("No measures, so the result is empty")
         return QlmRes(raw_data=[])
-    counts = [{int(k, 16): v for k, v in count.items()} for count in counts]
+    counts = [{int(k, 2): v for k, v in count.items()} for count in counts]
     ret = QlmRes(raw_data=[])
     for state, freq in counts[0].items():
         if not isinstance(state, int):
@@ -174,7 +174,7 @@ def generate_qlm_list_results(qiskit_result):
     except AttributeError:
         print("No measures, so the result is empty")
         return QlmRes(raw_data=[])
-    counts = [{int(k, 16): v for k, v in count.items()} for count in counts]
+    counts = [{int(k, 2): v for k, v in count.items()} for count in counts]
     ret_list = []
     for count in counts:
         ret = QlmRes(raw_data=[])
@@ -552,6 +552,7 @@ class BackendToQPU(QPUHandler):
             result = sampler(circuit_indices=list(range(len(qiskit_circuits))),
                             shots=qlm_batch.jobs[0].nbshots or \
                                 self.backend.configuration().max_shots)
+        print(result)
         results = generate_qlm_list_results(result)
         new_results = []
         for result in results:
