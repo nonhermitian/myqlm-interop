@@ -552,7 +552,6 @@ class BackendToQPU(QPUHandler):
             result = sampler(circuit_indices=list(range(len(qiskit_circuits))),
                             shots=qlm_batch.jobs[0].nbshots or \
                                 self.backend.configuration().max_shots)
-        print(result)
         results = generate_qlm_list_results(result)
         new_results = []
         for result in results:
