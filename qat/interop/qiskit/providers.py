@@ -167,17 +167,10 @@ def generate_qlm_list_results(qiskit_result):
     Returns:
         A QLM Result object built from the data in qiskit_result
     """
-    if isinstance(qiskit_result, dict):
-        # This is a raw call to the Sampler program
-        nbshots = qiskit_result['metadata'][0]['shots']
-    else:
-        nbshots = qiskit_result.metadata[0]['shots']
-
+    nbshots = qiskit_result['metadata'][0]['shots']
+    
     try:
-        if isinstance(qiskit_result, dict):
-            counts = [dist for dist in qiskit_result['quasi_dists']]
-        else:
-            counts = [dist for dist in qiskit_result.quasi_dists]
+        counts = [dist for dist in qiskit_result['quasi_dists']]
     except AttributeError:
         print("No measures, so the result is empty")
         return QlmRes(raw_data=[])
@@ -550,12 +543,15 @@ class BackendToQPU(QPUHandler):
             qiskit_circuit = job_to_qiskit_circuit(qlm_job)
             qiskit_circuits.append(qiskit_circuit)
 
-        with Sampler(circuits=qiskit_circuits,
-                     service=self._service,
-                     options={"backend": self.backend.name()}) as sampler:
-            result = sampler(circuit_indices=list(range(len(qiskit_circuits))),
-                            shots=qlm_batch.jobs[0].nbshots or \
-                                self.backend.configuration().max_shots)
+        program_inputs = {'circuits': qiskit_circuits,
+                          'run_options': {'shots': qlm_job.nbshots or \
+                              self.backend.configuration().max_shots},
+                          'circuit_indices': [0]}
+        options = {'backend_name': self.backend.name()}
+
+        result = self._service.run(program_id="sampler",
+                                   options=options,
+                                   inputs=program_inputs).result()
         results = generate_qlm_list_results(result)
         new_results = []
         for result in results:
@@ -576,11 +572,16 @@ class BackendToQPU(QPUHandler):
             raise ValueError("Backend cannot be None")
 
         qiskit_circuit = job_to_qiskit_circuit(qlm_job)
-        qiskit_result = execute(
-            qiskit_circuit, self.backend,
-            shots=qlm_job.nbshots or self.backend.configuration().max_shots,
-            coupling_map=None).result()
-        result = generate_qlm_result(qiskit_result)
+        program_inputs = {'circuits': qiskit_circuit,
+                          'run_options': {'shots': qlm_job.nbshots or \
+                              self.backend.configuration().max_shots},
+                          'circuit_indices': [0]}
+        options = {'backend_name': self.backend.name()}
+
+        result = self._service.run(program_id="sampler",
+                                   options=options,
+                                   inputs=program_inputs).result()
+        result = generate_qlm_result(result)
         return result
 
 
