@@ -485,7 +485,6 @@ def _gen_qiskit_gateset(q_circ):
         'RXX': q_circ.rxx,
         'RZZ': q_circ.rzz,
         'R': q_circ.r,
-        'MS': q_circ.ms
     }
 
 
@@ -526,7 +525,6 @@ def _get_qiskit_gate_from_name(name):
         'RXX': standard_gates.RXXGate,
         'RZZ': standard_gates.RZZGate,
         'R': standard_gates.RGate,
-        'MS': standard_gates.MSGate
     }
     try:
         gate = gates[name]
