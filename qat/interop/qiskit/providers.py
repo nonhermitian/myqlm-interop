@@ -89,13 +89,14 @@ import warnings
 from uuid import uuid4
 import numpy as np
 
-from qiskit_ibm_runtime import QiskitRuntimeService, Sampler
+from qiskit_ibm_runtime import QiskitRuntimeService
 from qiskit.providers import BackendV1, JobV1, Options
 from qiskit.providers.models.backendconfiguration import BackendConfiguration
+from qiskit.providers.aer.backends.aerbackend import AerBackend
 from qiskit.result import Result
 from qiskit.result.models import ExperimentResult, ExperimentResultData
 from qiskit.qobj import QobjExperimentHeader
-from qiskit import execute, Aer, IBMQ
+from qiskit import Aer, IBMQ, transpile
 
 # QLM imports
 from qat.interop.qiskit.converters import qiskit_to_qlm
@@ -135,10 +136,19 @@ def generate_qlm_result(qiskit_result):
     Returns:
         A QLM Result object built from the data in qiskit_result
     """
-
-    nbshots = qiskit_result.metadata[0]['shots']
+    if not isinstance(qiskit_result, dict):
+        nbshots = qiskit_result.results[0].shots
+        denom = nbshots
+    else:
+        nbshots = qiskit_result.metadata[0]['shots']
+        denom = 1
     try:
-        counts = [dist for dist in qiskit_result.quasi_dists]
+        if not isinstance(qiskit_result, dict):
+            counts = [result.data.counts for result in qiskit_result.results]
+            counts = [{int(k, 16): v for k, v in count.items()} for count in counts]
+        else:
+            counts = [dist for dist in qiskit_result.quasi_dists]
+            counts = [{int(k, 2): v for k, v in count.items()} for count in counts]
     except AttributeError:
         print("No measures, so the result is empty")
         return QlmRes(raw_data=[])
@@ -149,7 +159,7 @@ def generate_qlm_result(qiskit_result):
             print(f"State is {type(state)}")
         ret.raw_data.append(
             Sample(state=state,
-                   probability=freq,
+                   probability=freq/denom,
                    err=np.sqrt(
                        freq / nbshots * (1. - freq / nbshots) / (nbshots - 1))
                    if nbshots > 1 else None)
@@ -167,13 +177,22 @@ def generate_qlm_list_results(qiskit_result):
     Returns:
         A QLM Result object built from the data in qiskit_result
     """
-    nbshots = qiskit_result['metadata'][0]['shots']
+    if not isinstance(qiskit_result, dict):
+        nbshots = qiskit_result.results[0].shots
+        denom = nbshots
+    else:
+        nbshots = qiskit_result['metadata'][0]['shots']
+        denom = 1
     try:
-        counts = [dist for dist in qiskit_result['quasi_dists']]
+        if not isinstance(qiskit_result, dict):
+            counts = [result.data.counts for result in qiskit_result.results]
+            counts = [{int(k, 16): v for k, v in count.items()} for count in counts]
+        else:
+            counts = [dist for dist in qiskit_result['quasi_dists']]
+            counts = [{int(k, 2): v for k, v in count.items()} for count in counts]
     except AttributeError:
         print("No measures, so the result is empty")
         return QlmRes(raw_data=[])
-    counts = [{int(k, 2): v for k, v in count.items()} for count in counts]
     ret_list = []
     for count in counts:
         ret = QlmRes(raw_data=[])
@@ -182,7 +201,7 @@ def generate_qlm_list_results(qiskit_result):
                 print("State is {type(state)}")
             ret.raw_data.append(
                 Sample(state=state,
-                       probability=freq,
+                       probability=freq/denom,
                        err=np.sqrt(
                            freq / nbshots * (1. - freq / nbshots) / (nbshots - 1))
                        if nbshots > 1 else None)
@@ -410,7 +429,6 @@ class QPUToBackend(BackendV1):
             raise NoQpuAttached("No qpu attached to the QLM connector.")
         circuits = run_input if isinstance(run_input, list) else [run_input]
         
-
         for kwarg in kwargs:
             if not hasattr(self.options, kwarg):
                 raise ValueError(f"'{kwarg}' parameter not supported")
@@ -490,9 +508,11 @@ class BackendToQPU(QPUHandler):
         # To do this in a backward compatible way, we need to extract
         # the user token from the backend instance and directly init
         # a new service object
-        iqx_token = self.backend._api_client._credentials.token
-        self._service = QiskitRuntimeService(token=iqx_token,
-                                             channel='ibm_quantum')
+        self._service = None
+        if not isinstance(self.backend, AerBackend):
+            iqx_token = self.backend._api_client._credentials.token
+            self._service = QiskitRuntimeService(token=iqx_token,
+                                                 channel='ibm_quantum')
 
     def set_backend(self, backend=None, token=None,
                     ibmq_backend='ibmq_qasm_simulator'):
@@ -541,16 +561,21 @@ class BackendToQPU(QPUHandler):
         for qlm_job in qlm_batch.jobs:
             qiskit_circuit = job_to_qiskit_circuit(qlm_job)
             qiskit_circuits.append(qiskit_circuit)
+        if isinstance(self.backend, AerBackend):
+            # If Aer simulator
+            trans_circs = transpile(qiskit_circuits, self.backend)
+            result = self.backend.run(trans_circs, shots=qlm_job.nbshots or \
+                                        self.backend.configuration().max_shots).result()
+        else:
+            program_inputs = {'circuits': qiskit_circuits,
+                            'run_options': {'shots': qlm_job.nbshots or \
+                                self.backend.configuration().max_shots},
+                            'circuit_indices': list(range(len(qiskit_circuits)))}
+            options = {'backend_name': self.backend.name()}
 
-        program_inputs = {'circuits': qiskit_circuits,
-                          'run_options': {'shots': qlm_job.nbshots or \
-                              self.backend.configuration().max_shots},
-                          'circuit_indices': list(range(len(qiskit_circuits)))}
-        options = {'backend_name': self.backend.name()}
-
-        result = self._service.run(program_id="sampler",
-                                   options=options,
-                                   inputs=program_inputs).result()
+            result = self._service.run(program_id="sampler",
+                                    options=options,
+                                    inputs=program_inputs).result()
 
         results = generate_qlm_list_results(result)
         new_results = []
@@ -572,15 +597,21 @@ class BackendToQPU(QPUHandler):
             raise ValueError("Backend cannot be None")
 
         qiskit_circuit = job_to_qiskit_circuit(qlm_job)
-        program_inputs = {'circuits': qiskit_circuit,
-                          'run_options': {'shots': qlm_job.nbshots or \
-                              self.backend.configuration().max_shots},
-                          'circuit_indices': [0]}
-        options = {'backend_name': self.backend.name()}
+        if isinstance(self.backend, AerBackend):
+            # If Aer simulator
+            trans_circs = transpile(qiskit_circuit, self.backend)
+            result = self.backend.run(trans_circs, shots=qlm_job.nbshots or \
+                                        self.backend.configuration().max_shots).result()
+        else:
+            program_inputs = {'circuits': qiskit_circuit,
+                            'run_options': {'shots': qlm_job.nbshots or \
+                                self.backend.configuration().max_shots},
+                            'circuit_indices': [0]}
+            options = {'backend_name': self.backend.name()}
 
-        result = self._service.run(program_id="sampler",
-                                   options=options,
-                                   inputs=program_inputs).result()
+            result = self._service.run(program_id="sampler",
+                                    options=options,
+                                    inputs=program_inputs).result()
         result = generate_qlm_result(result)
         return result
 
@@ -740,9 +771,11 @@ class AsyncBackendToQPU(QPUHandler):
         # To do this in a backward compatible way, we need to extract
         # the user token from the backend instance and directly init
         # a new service object
-        iqx_token = self.backend._api_client._credentials.token
-        self._service = QiskitRuntimeService(token=iqx_token,
-                                             channel='ibm_quantum')
+        self._service = None
+        if not isinstance(self.backend, AerBackend):
+            iqx_token = self.backend._api_client._credentials.token
+            self._service = QiskitRuntimeService(token=iqx_token,
+                                                 channel='ibm_quantum')
 
     def set_backend(self, backend=None, token=None,
                     ibmq_backend='ibmq_qasm_simulator'):
@@ -790,13 +823,19 @@ class AsyncBackendToQPU(QPUHandler):
             raise ValueError("Backend cannot be None")
 
         qiskit_circuit = job_to_qiskit_circuit(qlm_job)
-        program_inputs = {'circuits': qiskit_circuit,
-                          'run_options': {'shots': qlm_job.nbshots or \
-                              self.backend.configuration().max_shots},
-                          'circuit_indices': [0]}
-        options = {'backend_name': self.backend.name()}
+        if isinstance(self.backend, AerBackend):
+            # If Aer simulator
+            trans_circs = transpile(qiskit_circuit, self.backend)
+            async_job = self.backend.run(trans_circs, shots=qlm_job.nbshots or \
+                                            self.backend.configuration().max_shots)
+        else:
+            program_inputs = {'circuits': qiskit_circuit,
+                            'run_options': {'shots': qlm_job.nbshots or \
+                                self.backend.configuration().max_shots},
+                            'circuit_indices': [0]}
+            options = {'backend_name': self.backend.name()}
 
-        async_job = self._service.run(program_id="sampler", options=options, inputs=program_inputs)
+            async_job = self._service.run(program_id="sampler", options=options, inputs=program_inputs)
         return QiskitJob(qlm_job, async_job, self.backend.configuration().max_shots)
 
     def submit(self, qlm_batch):
@@ -821,14 +860,19 @@ class AsyncBackendToQPU(QPUHandler):
         for qlm_job in qlm_batch.jobs:
             qiskit_circuit = job_to_qiskit_circuit(qlm_job)
             qiskit_circuits.append(qiskit_circuit)
+        if isinstance(self.backend, AerBackend):
+            # If Aer simulator
+            trans_circs = transpile(qiskit_circuit, self.backend)
+            async_job = self.backend.run(trans_circs, shots=qlm_job.nbshots or \
+                                            self.backend.configuration().max_shots)
+        else:
+            program_inputs = {'circuits': qiskit_circuits,
+                            'run_options': {'shots': qlm_job.nbshots or \
+                                self.backend.configuration().max_shots},
+                            'circuit_indices': [0]}
+            options = {'backend_name': self.backend.name()}
 
-        program_inputs = {'circuits': qiskit_circuits,
-                          'run_options': {'shots': qlm_job.nbshots or \
-                              self.backend.configuration().max_shots},
-                          'circuit_indices': [0]}
-        options = {'backend_name': self.backend.name()}
-
-        async_job = self._service.run(program_id="sampler", options=options, inputs=program_inputs)
+            async_job = self._service.run(program_id="sampler", options=options, inputs=program_inputs)
         return QiskitJob(qlm_batch, async_job, self.backend.configuration().max_shots)
 
     def retrieve_job(self, file_name):
