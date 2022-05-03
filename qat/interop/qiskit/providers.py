@@ -168,7 +168,6 @@ def generate_qlm_list_results(qiskit_result):
         A QLM Result object built from the data in qiskit_result
     """
     nbshots = qiskit_result['metadata'][0]['shots']
-    
     try:
         counts = [dist for dist in qiskit_result['quasi_dists']]
     except AttributeError:
@@ -546,12 +545,13 @@ class BackendToQPU(QPUHandler):
         program_inputs = {'circuits': qiskit_circuits,
                           'run_options': {'shots': qlm_job.nbshots or \
                               self.backend.configuration().max_shots},
-                          'circuit_indices': [0]}
+                          'circuit_indices': list(range(len(qiskit_circuits)))}
         options = {'backend_name': self.backend.name()}
 
         result = self._service.run(program_id="sampler",
                                    options=options,
                                    inputs=program_inputs).result()
+
         results = generate_qlm_list_results(result)
         new_results = []
         for result in results:
